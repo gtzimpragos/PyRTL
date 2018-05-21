@@ -10,12 +10,13 @@ The set of functions includes
 
 from __future__ import print_function, unicode_literals
 
-# import re
 import six
+import math
 
 from .core import working_block, _NameIndexer
 from .pyrtlexceptions import PyrtlError, PyrtlInternalError
 from .wire import WireVector, Input, Output, Const, Register
+from pyrtl.rtllib import barrel
 
 # -----------------------------------------------------------------
 #        ___       __   ___  __   __
@@ -55,7 +56,52 @@ def wirevector_list(names, bitwidth=1, wvtype=WireVector):
     return wirelist
 
 
+def val_to_signed_integer(value, bitwidth):
+    """ Return value as intrepreted as a signed integer under twos complement.
+
+    :param vale: a python integer holding the value to convert
+    :param bitwidth: the length of the integer in bits to assume for conversion
+
+    Given an unsigned integer (not a wirevector!) covert that to a signed
+    integer.  This is useful for printing and interpreting values which are
+    negative numbers in twos complement."""
+    if isinstance(value, WireVector) or isinstance(bitwidth, WireVector):
+        raise PyrtlError('inputs must not be wirevectors')
+    if bitwidth < 1:
+        raise PyrtlError('bitwidth must be a positive integer')
+
+    neg_mask = 1 << (bitwidth - 1)
+    neg_part = value & neg_mask
+
+    pos_mask = neg_mask - 1
+    pos_part = value & pos_mask
+
+    return pos_part - neg_part
+
+
+def signed_add(a, b):
+    """ Return wirevector for result of signed addition.
+
+    :param a: a wirevector to serve as first input to addition
+    :param b: a wirevector to serve as second input to addition
+
+    Given a length n and length m wirevector the result of the
+    signed addition is length max(n,m)+1.  The inputs are twos
+    complement sign extended to the same length before adding."""
+    a, b = match_bitwidth(as_wires(a), as_wires(b), signed=True)
+    result_len = len(a) + 1
+    ext_a = a.sign_extended(result_len)
+    ext_b = b.sign_extended(result_len)
+    # add and truncate to the correct length
+    return (ext_a + ext_b)[0:result_len]
+
+
 def mult_signed(a, b):
+    # mult_signed is now deprecated, use "signed_mult" instead
+    return signed_mult(a, b)
+
+
+def signed_mult(a, b):
     """ Return a*b where a and b are treated as signed values. """
     a, b = as_wires(a), as_wires(b)
     final_len = len(a) + len(b)
@@ -129,6 +175,124 @@ def match_bitwidth(*args, **opt):
         return (wv.sign_extended(max_len) for wv in args)
     else:
         return (wv.zero_extended(max_len) for wv in args)
+
+
+def signed_lt(a, b):
+    """ Return a single bit result of signed less than comparison. """
+    a, b = match_bitwidth(as_wires(a), as_wires(b), signed=True)
+    r = a - b
+    return r[-1] ^ (~a[-1])
+
+
+def signed_le(a, b):
+    """ Return a single bit result of signed less than or equal comparison. """
+    a, b = match_bitwidth(as_wires(a), as_wires(b), signed=True)
+    r = a - b
+    return (r[-1] ^ (~a[-1])) | (a == b)
+
+
+def signed_gt(a, b):
+    """ Return a single bit result of signed greater than comparison. """
+    a, b = match_bitwidth(as_wires(a), as_wires(b), signed=True)
+    r = b - a
+    return r[-1] ^ (~b[-1])
+
+
+def signed_ge(a, b):
+    """ Return a single bit result of signed greater than or equal comparison. """
+    a, b = match_bitwidth(as_wires(a), as_wires(b), signed=True)
+    r = b - a
+    return (r[-1] ^ (~b[-1])) | (a == b)
+
+
+def _check_shift_inputs(a, shamt):
+    # TODO: perhaps this should just be implemented directly rather than throwing error
+    if isinstance(shamt, int):
+        raise PyrtlError('shift_amount is an integer, use slice instead')
+    if isinstance(shamt, Const):
+        raise PyrtlError('shift_amount is a constant, use slice instead')
+    a, shamt = as_wires(a), as_wires(shamt)
+    log_length = int(math.log(len(a)-1, 2))  # note the one offset
+    # TODO: perhaps this should just be implemented directly rather than throwing error
+    if len(shamt) > log_length:
+        raise PyrtlError('the shift_amount wirevector is providing bits '
+                         'that would shift the value off the end')
+    return a, shamt
+
+
+def shift_left_arithmetic(bits_to_shift, shift_amount):
+    """ Shift left arithmetic operation.
+
+    :param bits_to_shift: WireVector to shift left
+    :param shift_amount: WireVector specifying amount to shift
+    :return: WireVector of same length as bits_to_shift
+
+    This function returns a new WireVector of length equal to the length
+    of the input `bits_to_shift` but where the bits have been shifted
+    to the left.  An arithemetic shift is one that treats the value as
+    as signed number, although for left shift arithmetic and logic shift
+    are identical.  Note that `shift_amount` is treated as unsigned.
+    """
+    # shift left arithmetic and logical are the same thing
+    return shift_left_logical(bits_to_shift, shift_amount)
+
+
+def shift_right_arithmetic(bits_to_shift, shift_amount):
+    """ Shift right arithmetic operation.
+
+    :param bits_to_shift: WireVector to shift right
+    :param shift_amount: WireVector specifying amount to shift
+    :return: WireVector of same length as bits_to_shift
+
+    This function returns a new WireVector of length equal to the length
+    of the input `bits_to_shift` but where the bits have been shifted
+    to the right.  An arithemetic shift is one that treats the value as
+    as signed number, meaning the sign bit (the most significant bit of
+    `bits_to_shift`) is shifted in. Note that `shift_amount` is treated as
+    unsigned.
+    """
+    a, shamt = _check_shift_inputs(bits_to_shift, shift_amount)
+    bit_in = bits_to_shift[-1]  # shift in sign_bit
+    dir = Const(0)  # shift right
+    return barrel.barrel_shifter(bits_to_shift, bit_in, dir, shift_amount)
+
+
+def shift_left_logical(bits_to_shift, shift_amount):
+    """ Shift left logical operation.
+
+    :param bits_to_shift: WireVector to shift left
+    :param shift_amount: WireVector specifying amount to shift
+    :return: WireVector of same length as bits_to_shift
+
+    This function returns a new WireVector of length equal to the length
+    of the input `bits_to_shift` but where the bits have been shifted
+    to the left.  An logical shift is one that treats the value as
+    as unsigned number, meaning the zeros are shifted in.  Note that
+    `shift_amount` is treated as unsigned.
+    """
+    a, shamt = _check_shift_inputs(bits_to_shift, shift_amount)
+    bit_in = Const(0)  # shift in a 0
+    dir = Const(1)  # shift left
+    return barrel.barrel_shifter(bits_to_shift, bit_in, dir, shift_amount)
+
+
+def shift_right_logical(bits_to_shift, shift_amount):
+    """ Shift right logical operation.
+
+    :param bits_to_shift: WireVector to shift left
+    :param shift_amount: WireVector specifying amount to shift
+    :return: WireVector of same length as bits_to_shift
+
+    This function returns a new WireVector of length equal to the length
+    of the input `bits_to_shift` but where the bits have been shifted
+    to the right.  An logical shift is one that treats the value as
+    as unsigned number, meaning the zeros are shifted in regardless of
+    the "sign bit".  Note that `shift_amount` is treated as unsigned.
+    """
+    a, shamt = _check_shift_inputs(bits_to_shift, shift_amount)
+    bit_in = Const(0)  # shift in a 0
+    dir = Const(0)  # shift right
+    return barrel.barrel_shifter(bits_to_shift, bit_in, dir, shift_amount)
 
 
 probeIndexer = _NameIndexer('Probe-')

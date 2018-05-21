@@ -41,12 +41,13 @@ class Simulation(object):
     }
 
     def __init__(
-            self, tracer=None, register_value_map=None, memory_value_map=None,
+            self, tracer=True, register_value_map=None, memory_value_map=None,
             default_value=0, block=None):
         """ Creates a new circuit simulator
 
         :param tracer: an instance of SimulationTrace used to store execution results.
-            defaults to a SimulationTrace with no params passed to it
+            Defaults to a new SimulationTrace with no params passed to it.  If None is
+            passed, no tracer is instantiated (which is good for long running simulations)
         :param register_value_map: Defines the initial value for
           the roms specified. Format: {Register: value}.
         :param memory_value_map: Defines initial values for many
@@ -71,10 +72,11 @@ class Simulation(object):
         block.sanity_check()  # check that this is a good hw block
 
         self.value = {}  # map from signal->value
+        self.regvalue = {}  # map from register->value on next tick
         self.memvalue = {}  # map from {memid :{address: value}}
         self.block = block
         self.default_value = default_value
-        if tracer is None:
+        if tracer is True:
             tracer = SimulationTrace()
         self.tracer = tracer
         self._initialize(register_value_map, memory_value_map)
@@ -96,10 +98,7 @@ class Simulation(object):
         reg_set = self.block.wirevector_subset(Register)
         if register_value_map is not None:
             for r in reg_set:
-                if r in register_value_map:
-                    self.value[r] = register_value_map[r]
-                else:
-                    self.value[r] = default_value
+                self.value[r] = self.regvalue[r] = register_value_map.get(r, default_value)
 
         # set constants to their set values
         for w in self.block.wirevector_subset(Const):
@@ -150,9 +149,6 @@ class Simulation(object):
         sim.step({'a': 1, 'x': 23}) to simulate a cycle with values 1 and 23
         respectively
         """
-        # To avoid weird loops, we need a copy of the old values which
-        # we can then use to make our updates from
-        prior_value = self.value.copy()
 
         # Check that all Input have a corresponding provided_input
         input_set = self.block.wirevector_subset(Input)
@@ -186,15 +182,12 @@ class Simulation(object):
             for i in input_set.difference(supplied_inputs):
                 raise PyrtlError('Input "%s" has no input value specified' % i.name)
 
-        # Do all of the reg operations based off of the priors at clk edge
-        for net in self.reg_update_nets:
-            argval = prior_value[net.args[0]]
-            self.value[net.dests[0]] = self._sanitize(argval, net.dests[0])
+        self.value.update(self.regvalue)  # apply register updates from previous step
 
         for net in self.ordered_nets:
             self._execute(net)
 
-            # Do all of the mem operations based off the new values changed in _execute()
+        # Do all of the mem operations based off the new values changed in _execute()
         for net in self.mem_update_nets:
             self._mem_update(net)
 
@@ -202,6 +195,11 @@ class Simulation(object):
         # print self.value # Helpful Debug Print
         if self.tracer is not None:
             self.tracer.add_step(self.value)
+
+        # Do all of the reg updates based off of the new values
+        for net in self.reg_update_nets:
+            argval = self.value[net.args[0]]
+            self.regvalue[net.dests[0]] = self._sanitize(argval, net.dests[0])
 
         # finally, if any of the rtl_assert assertions are failing then we should
         # raise the appropriate exceptions
@@ -319,7 +317,7 @@ class FastSimulation(object):
 
     def __init__(
             self, register_value_map=None, memory_value_map=None,
-            default_value=0, tracer=None, block=None, code_file=None):
+            default_value=0, tracer=True, block=None, code_file=None):
         """
         Instantiates a Fast Simulation instance.
 
@@ -338,7 +336,7 @@ class FastSimulation(object):
 
         self.block = block
         self.default_value = default_value
-        if tracer is None:
+        if tracer is True:
             tracer = SimulationTrace()
         self.tracer = tracer
         self.sim_func = None
@@ -419,8 +417,7 @@ class FastSimulation(object):
 
         # for tracer compatibility
         self.context = self.outs.copy()
-        self.context.update(self.regs)
-        self.context.update(ins)
+        self.context.update(ins)  # also gets old register values
         if self.tracer is not None:
             self.tracer.add_fast_step(self)
 

@@ -11,6 +11,20 @@ from pyrtl.rtllib import testingutils as utils
 
 # ---------------------------------------------------------------
 
+class TestPrettyPrinting(unittest.TestCase):
+    def setUp(self):
+        pass
+
+    def test_val_to_signed_integer(self):
+        self.assertEqual(pyrtl.val_to_signed_integer(0b000,3), 0)
+        self.assertEqual(pyrtl.val_to_signed_integer(0b001,3), 1)
+        self.assertEqual(pyrtl.val_to_signed_integer(0b010,3), 2)
+        self.assertEqual(pyrtl.val_to_signed_integer(0b011,3), 3)
+        self.assertEqual(pyrtl.val_to_signed_integer(0b100,3), -4)
+        self.assertEqual(pyrtl.val_to_signed_integer(0b101,3), -3)
+        self.assertEqual(pyrtl.val_to_signed_integer(0b110,3), -2)
+        self.assertEqual(pyrtl.val_to_signed_integer(0b111,3), -1)
+
 
 class TestAnyAll(unittest.TestCase):
     def setUp(self):
@@ -270,6 +284,62 @@ class TestRtlProbe(unittest.TestCase):
         o = pyrtl.Output(1)
         o <<= pyrtl.probe(i + 1)
         pyrtl.set_debug_mode(False)
+
+
+class TestShiftSimulation(unittest.TestCase):
+
+    def setUp(self):
+        random.seed(8492049)
+        pyrtl.reset_working_block()
+
+    def shift_checker(self, shift_func, ref_func, input_width, shift_width, test_amt=20):
+        inp, inp_vals = utils.an_input_and_vals(input_width, test_vals=test_amt, name='inp')
+        shf, shf_vals = utils.an_input_and_vals(shift_width, test_vals=test_amt, name='shf')
+        out = pyrtl.Output(input_width, "out")
+        shf_out = shift_func(inp,shf)
+        self.assertEqual(len(out), len(shf_out))  # output should have width of input
+        out <<= shf_out
+        true_result = [ref_func(i,s) for i,s in zip(inp_vals, shf_vals)]
+        shift_result = utils.sim_and_ret_out(out, [inp,shf], [inp_vals,shf_vals])
+        self.assertEqual(shift_result, true_result)
+
+    def sll_checker(self, input_width, shift_width):
+        mask = (1<<input_width)-1
+        ref = lambda i,s: (i<<s) & mask
+        self.shift_checker(pyrtl.shift_left_logical, ref, input_width, shift_width)
+
+    def sla_checker(self, input_width, shift_width):
+        mask = (1<<input_width)-1
+        ref = lambda i,s: (i<<s) & mask
+        self.shift_checker(pyrtl.shift_left_arithmetic, ref, input_width, shift_width)
+
+    def srl_checker(self, input_width, shift_width):
+        mask = (1<<input_width)-1
+        ref = lambda i,s: (i>>s) & mask
+        self.shift_checker(pyrtl.shift_right_logical, ref, input_width, shift_width)
+
+    def sra_checker(self, input_width, shift_width):
+        # a little more work is required to take the positive number and treat it
+        # as a twos complement number for the purpose of testing the shifter
+        def ref(i,s):
+            mask = (1<<input_width)-1
+            if (i>>input_width-1) & 0x1 == 0x1:
+                return ((~mask|i)>>s) & mask  # negative number
+            else:
+                return (i>>s) & mask  # possitive number
+        self.shift_checker(pyrtl.shift_right_arithmetic, ref, input_width, shift_width)
+
+    def test_sll(self):
+        self.sll_checker(5,2)
+
+    def test_sla(self):
+        self.sla_checker(5,2)
+
+    def test_srl(self):
+        self.srl_checker(5,2)
+
+    def test_sra(self):
+        self.sra_checker(5,2)
 
 
 class TestBasicMult(unittest.TestCase):

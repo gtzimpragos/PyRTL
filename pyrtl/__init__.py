@@ -26,6 +26,17 @@ from .helperfuncs import register_list
 from .helperfuncs import wirevector_list
 from .helperfuncs import as_wires
 from .helperfuncs import match_bitwidth
+from .helperfuncs import val_to_signed_integer
+from .helperfuncs import signed_add
+from .helperfuncs import signed_mult
+from .helperfuncs import signed_lt
+from .helperfuncs import signed_le
+from .helperfuncs import signed_gt
+from .helperfuncs import signed_ge
+from .helperfuncs import shift_left_arithmetic
+from .helperfuncs import shift_right_arithmetic
+from .helperfuncs import shift_left_logical
+from .helperfuncs import shift_right_logical
 from .helperfuncs import probe
 from .helperfuncs import rtl_assert
 from .helperfuncs import check_rtl_assertions
